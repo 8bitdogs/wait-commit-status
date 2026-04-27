@@ -1,0 +1,89 @@
+name: "Wait Commit Status"
+description: "Polls a commit status context until it reaches the expected state
+  or times out"
+
+inputs:
+  token:
+    description: "GitHub token used to authenticate API requests"
+    required: true
+  repository:
+    description: "Repository in owner/repo format"
+    required: false
+    default: "${{ github.repository }}"
+  sha:
+    description: "Commit SHA to watch"
+    required: false
+    default: "${{ github.sha }}"
+  state:
+    description: "Expected commit state to wait for (error | failure | pending | success)"
+    required: false
+    default: "success"
+  context:
+    description: "The status context name to watch (e.g. \"ci/circleci: build\")"
+    required: true
+  interval:
+    description: "Polling interval in seconds"
+    required: false
+    default: "5"
+  timeout:
+    description: "Maximum number of seconds to wait before failing"
+    required: false
+    default: "600"
+
+outputs:
+  state:
+    description: "The final observed state of the commit status"
+    value: ${{ steps.wait.outputs.state }}
+
+runs:
+  using: composite
+  steps:
+    - id: wait
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ inputs.repository }}
+        SHA: ${{ inputs.sha }}
+        EXPECTED_STATE: ${{ inputs.state }}
+        CTX: ${{ inputs.context }}
+        INTERVAL: ${{ inputs.interval }}
+        TIMEOUT: ${{ inputs.timeout }}
+      run: |
+        deadline=$(( SECONDS + TIMEOUT ))
+        current_state=""
+
+        echo "Waiting for commit status context '${CTX}' to reach state '${EXPECTED_STATE}'"
+        echo "Repository: ${REPO}  SHA: ${SHA}"
+        echo "Polling every ${INTERVAL}s, timeout ${TIMEOUT}s"
+
+        while [ "$SECONDS" -lt "$deadline" ]; do
+          response=$(curl -sf \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPO}/commits/${SHA}/statuses") || {
+            echo "::warning::Failed to reach GitHub API, retrying..."
+            sleep "$INTERVAL"
+            continue
+          }
+
+          # Statuses are newest-first; grab the latest entry for our context
+          current_state=$(printf '%s' "$response" | \
+            jq -r --arg ctx "$CTX" \
+              'map(select(.context == $ctx)) | first | .state // ""')
+
+          echo "  context='${CTX}'  state='${current_state:-not found}'  expected='${EXPECTED_STATE}'"
+
+          if [ "$current_state" = "$EXPECTED_STATE" ]; then
+            echo "state=${current_state}" >> "$GITHUB_OUTPUT"
+            echo "Commit status context '${CTX}' transitioned to expected state '${EXPECTED_STATE}'"
+            exit 0
+          fi
+
+          sleep "$INTERVAL"
+        done
+
+        # Timed out — still emit whatever state we last saw
+        echo "state=${current_state}" >> "$GITHUB_OUTPUT"
+        echo "::error::Timed out after ${TIMEOUT}s waiting for context '${CTX}' to reach '${EXPECTED_STATE}' (last observed: '${current_state:-not found}')"
+        exit 1
