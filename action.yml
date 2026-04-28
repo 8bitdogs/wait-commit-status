@@ -1,4 +1,4 @@
-name: "Wait Commit Status"
+name: "Commit Status Gate by 8bitdogs"
 description: "Polls a commit status context until it reaches the expected state
   or times out"
 
