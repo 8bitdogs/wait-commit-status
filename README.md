@@ -34,6 +34,23 @@ Notes:
 - The action fails fast when an observed state matches any value in `fail-states` (default `error,failure`).
 - The action keeps polling only while state is in `pending-states` unless expected state is reached.
 
+## Permissions
+
+The token passed via `token` must have the following permission:
+
+| Permission | Access | Reason |
+|------------|--------|--------|
+| `statuses` | `read` | Read commit status contexts via the GitHub API |
+
+When using `${{ secrets.GITHUB_TOKEN }}`, add this to your job:
+
+```yaml
+permissions:
+  statuses: read
+```
+
+If you are watching a commit in a **different repository**, `GITHUB_TOKEN` will not have access — use a Personal Access Token (PAT) or a fine-grained token with `statuses: read` on that repository instead.
+
 ## Outputs
 
 | Output | Description |
