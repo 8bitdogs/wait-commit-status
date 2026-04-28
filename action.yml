@@ -18,9 +18,22 @@ inputs:
     description: "Expected commit state to wait for (error | failure | pending | success)"
     required: false
     default: "success"
+  not-found-state:
+    description: "State to use when the specified context does not exist yet
+      (success | error | pending)"
+    required: false
+    default: "pending"
   context:
     description: "The status context name to watch (e.g. \"ci/circleci: build\")"
     required: true
+  fail-states:
+    description: "Comma-separated states that should fail immediately when observed"
+    required: false
+    default: "error,failure"
+  pending-states:
+    description: "Comma-separated states that should keep polling"
+    required: false
+    default: "pending"
   interval:
     description: "Polling interval in seconds"
     required: false
@@ -45,16 +58,45 @@ runs:
         REPO: ${{ inputs.repository }}
         SHA: ${{ inputs.sha }}
         EXPECTED_STATE: ${{ inputs.state }}
+        NOT_FOUND_STATE: ${{ inputs.not-found-state }}
         CTX: ${{ inputs.context }}
+        FAIL_STATES: ${{ inputs.fail-states }}
+        PENDING_STATES: ${{ inputs.pending-states }}
         INTERVAL: ${{ inputs.interval }}
         TIMEOUT: ${{ inputs.timeout }}
       run: |
         deadline=$(( SECONDS + TIMEOUT ))
         current_state=""
 
+        normalize_csv() {
+          printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+        }
+
+        csv_contains() {
+          list=",$(normalize_csv "$1"),"
+          value="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+          [[ "$list" == *",${value},"* ]]
+        }
+
+        EXPECTED_STATE="$(printf '%s' "$EXPECTED_STATE" | tr '[:upper:]' '[:lower:]')"
+        NOT_FOUND_STATE="$(printf '%s' "$NOT_FOUND_STATE" | tr '[:upper:]' '[:lower:]')"
+        FAIL_STATES="$(normalize_csv "$FAIL_STATES")"
+        PENDING_STATES="$(normalize_csv "$PENDING_STATES")"
+
+        case "$NOT_FOUND_STATE" in
+          success|error|pending) ;;
+          *)
+            echo "::error::Invalid input not-found-state='${NOT_FOUND_STATE}'. Allowed values: success,error,pending"
+            exit 1
+            ;;
+        esac
+
         echo "Waiting for commit status context '${CTX}' to reach state '${EXPECTED_STATE}'"
         echo "Repository: ${REPO}  SHA: ${SHA}"
         echo "Polling every ${INTERVAL}s, timeout ${TIMEOUT}s"
+        echo "If context is missing, using state '${NOT_FOUND_STATE}'"
+        echo "Fail states: ${FAIL_STATES}"
+        echo "Pending states: ${PENDING_STATES}"
 
         while [ "$SECONDS" -lt "$deadline" ]; do
           response=$(curl -sf \
@@ -72,12 +114,30 @@ runs:
             jq -r --arg ctx "$CTX" \
               'map(select(.context == $ctx)) | first | .state // ""')
 
-          echo "  context='${CTX}'  state='${current_state:-not found}'  expected='${EXPECTED_STATE}'"
+          if [ -z "$current_state" ]; then
+            current_state="$NOT_FOUND_STATE"
+          fi
+
+          current_state="$(printf '%s' "$current_state" | tr '[:upper:]' '[:lower:]')"
+
+          echo "  context='${CTX}'  state='${current_state}'  expected='${EXPECTED_STATE}'"
 
           if [ "$current_state" = "$EXPECTED_STATE" ]; then
             echo "state=${current_state}" >> "$GITHUB_OUTPUT"
             echo "Commit status context '${CTX}' transitioned to expected state '${EXPECTED_STATE}'"
             exit 0
+          fi
+
+          if csv_contains "$FAIL_STATES" "$current_state"; then
+            echo "state=${current_state}" >> "$GITHUB_OUTPUT"
+            echo "::error::Observed fail state '${current_state}' for context '${CTX}'"
+            exit 1
+          fi
+
+          if ! csv_contains "$PENDING_STATES" "$current_state"; then
+            echo "state=${current_state}" >> "$GITHUB_OUTPUT"
+            echo "::error::Observed non-pending, non-expected state '${current_state}' for context '${CTX}'"
+            exit 1
           fi
 
           sleep "$INTERVAL"

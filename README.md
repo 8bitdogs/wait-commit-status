@@ -21,9 +21,18 @@ the expected state or a timeout is exceeded.
 | `repository` | | `${{ github.repository }}` | Repository in `owner/repo` format |
 | `sha` | | `${{ github.sha }}` | Commit SHA to watch |
 | `state` | | `success` | Expected state to wait for: `error`, `failure`, `pending`, or `success` |
+| `not-found-state` | | `pending` | State to use when the specified context does not exist yet: `success`, `error`, or `pending` |
 | `context` | ✅ | — | Status context name (e.g. `ci/circleci: build`) |
+| `fail-states` | | `error,failure` | Comma-separated states that should fail immediately |
+| `pending-states` | | `pending` | Comma-separated states that should continue polling |
 | `interval` | | `5` | Polling interval in seconds |
 | `timeout` | | `600` | Maximum seconds to wait before failing |
+
+Notes:
+
+- If the target context has not been created yet, the action maps it to `not-found-state` (default `pending`).
+- The action fails fast when an observed state matches any value in `fail-states` (default `error,failure`).
+- The action keeps polling only while state is in `pending-states` unless expected state is reached.
 
 ## Outputs
 
@@ -44,6 +53,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           context: 'ci/circleci: build'
           state: 'success'
+          not-found-state: 'pending'
+          fail-states: 'error,failure'
+          pending-states: 'pending'
           interval: '5'
           timeout: '300'
 
